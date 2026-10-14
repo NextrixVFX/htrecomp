@@ -3,9 +3,9 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
-#include <cctype>
 #include <cstring>
 #include <ctime>
 #include <fstream>
@@ -64,8 +64,8 @@ constexpr HtRow S(const char* cvar, const char* label, const char* help = nullpt
   return HtRow{HtRowKind::kSetting, cvar, label, help, nullptr, 0, optional};
 }
 constexpr HtRow E(const char* cvar, const char* label, const char* help,
-                  const HtEnumOption* options, int count) {
-  return HtRow{HtRowKind::kEnum, cvar, label, help, options, count, false};
+                  const HtEnumOption* options, int count, bool optional = false) {
+  return HtRow{HtRowKind::kEnum, cvar, label, help, options, count, optional};
 }
 constexpr HtRow Sep() {
   return HtRow{HtRowKind::kSeparator, nullptr, nullptr, nullptr, nullptr, 0, false};
@@ -119,8 +119,16 @@ constexpr HtRow kDisplayRows[] = {
     S("window_height", "Window height", "0 uses the resolution above."),
     Sep(),
     Special(HtRowKind::kFrameRate, nullptr),
+    // Backend-specific: whichever backend this build has registers its own.
     S("d3d12_allow_variable_refresh_rate_and_tearing", "Allow tearing / VRR",
-      "Skips the vblank wait. Good on G-Sync or FreeSync, tears on a fixed-refresh display."),
+      "Skips the vblank wait. Good on G-Sync or FreeSync, tears on a fixed-refresh display.",
+      true),
+    S("vulkan_allow_present_mode_immediate", "Allow tearing / VRR",
+      "Skips the vblank wait. Good on G-Sync or FreeSync, tears on a fixed-refresh display.",
+      true),
+    S("vulkan_allow_present_mode_mailbox", "Triple buffering",
+      "Presents the newest finished frame instead of queueing. Low latency, no tearing.",
+      true),
     S("host_present_from_non_ui_thread", "Present off the UI thread",
       "Usually smoother. Turn off if the picture stalls while an overlay is open."),
     Sep(),
@@ -159,8 +167,9 @@ constexpr HtRow kGraphicsRows[] = {
       "Avoids hitches, but an effect can be missing the first time it appears."),
     S("store_shaders", "Cache compiled shaders",
       "Keeps compiled shaders between runs, so the first lap does not stutter."),
+    // D3D12 only; the Vulkan backend has no equivalent knob.
     S("d3d12_pipeline_creation_threads", "Pipeline compile threads",
-      "-1 picks a count from your CPU. More threads shorten the first-run stutter."),
+      "-1 picks a count from your CPU. More threads shorten the first-run stutter.", true),
     Sep(),
     S("texture_cache_memory_limit_soft", "Texture cache soft limit (MB)",
       "Textures past this are evicted once they have gone unused for the lifetime below."),
@@ -231,13 +240,19 @@ constexpr HtRow kFixRows[] = {
     S("clear_memory_page_state", "Refresh GPU page state each frame",
       "Keeps the CPU and GPU views of memory coherent. Off risks stale data."),
     Sep(),
+    // D3D12 only; no Vulkan equivalent is exposed.
     E("d3d12_queue_priority", "GPU queue priority",
       "Scheduling priority against other apps. Realtime falls back silently if not granted.",
-      kQueuePriorityOptions, int(std::size(kQueuePriorityOptions))),
+      kQueuePriorityOptions, int(std::size(kQueuePriorityOptions)), true),
     S("d3d12_bindless", "Bindless resources",
-      "Faster descriptor path where the GPU supports it. Off is the fallback."),
+      "Faster descriptor path where the GPU supports it. Off is the fallback.", true),
+    // Same knob, one per backend: both map the guest's RAM sparsely rather
+    // than committing all of it. Vulkan falls back to a committed buffer on
+    // its own if the device cannot do sparse residency.
     S("d3d12_tiled_shared_memory", "Tiled shared memory",
-      "Maps the guest's 512 MB of RAM sparsely instead of committing all of it."),
+      "Maps the guest's 512 MB of RAM sparsely instead of committing all of it.", true),
+    S("vulkan_sparse_shared_memory", "Sparse shared memory",
+      "Maps the guest's 512 MB of RAM sparsely instead of committing all of it.", true),
 };
 
 constexpr HtTab kTabs[] = {
@@ -466,10 +481,12 @@ bool HtSettingsDialog::DrawSetting(const char* cvar_name, const char* label, con
 
 bool HtSettingsDialog::DrawEnumSetting(const char* cvar_name, const char* label,
                                        const char* help, const HtEnumOption* options,
-                                       int count) {
+                                       int count, bool optional) {
   auto* entry = Find(cvar_name);
   if (!entry) {
-    ImGui::TextDisabled("%s (unavailable: %s)", label, cvar_name);
+    if (!optional) {
+      ImGui::TextDisabled("%s (unavailable: %s)", label, cvar_name);
+    }
     return false;
   }
   const bool needs_restart = (entry->lifecycle == rex::cvar::Lifecycle::kRequiresRestart);
@@ -832,6 +849,12 @@ void HtSettingsDialog::DrawSaveTools() {
     std::filesystem::create_directories(dir, ec);
 #if defined(_WIN32)
     ::ShellExecuteW(nullptr, L"open", dir.wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+#elif defined(__APPLE__)
+    // The path is ours (config dir + a fixed folder name), not user input, so
+    // there is nothing to quote-escape beyond the quotes themselves.
+    std::system(("open \"" + dir.string() + "\" &").c_str());
+#else
+    std::system(("xdg-open \"" + dir.string() + "\" >/dev/null 2>&1 &").c_str());
 #endif
   }
   if (!save_status_.empty()) {
@@ -860,7 +883,8 @@ void HtSettingsDialog::DrawRows(const HtRow* rows, int count, const std::string&
         DrawSetting(row.cvar, row.label, row.help, row.optional);
         break;
       case HtRowKind::kEnum:
-        DrawEnumSetting(row.cvar, row.label, row.help, row.options, row.option_count);
+        DrawEnumSetting(row.cvar, row.label, row.help, row.options, row.option_count,
+                        row.optional);
         break;
       case HtRowKind::kSeparator:
         ImGui::Separator();

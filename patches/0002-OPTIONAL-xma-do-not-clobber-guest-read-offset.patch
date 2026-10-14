@@ -1,0 +1,31 @@
+From: htrecomp
+Subject: [PATCH] audio: stop clobbering the guest's XMA output read offset
+
+NOT APPLIED BY DEFAULT. See SDK_PATCHES.md item 4, which marks this
+"Unproven": it was written while chasing an audio stutter that turned out to
+be timer resolution, and was never independently shown to fix anything. It
+survives only because it matches Xenia's ownership model.
+
+The guest owns output_buffer_read_offset via XMASetOutputBufferReadOffset;
+copying it back in the merge fights the guest for ownership.
+
+Apply with:
+  cd third_party/rexglue-sdk
+  git apply ../../patches/0002-OPTIONAL-xma-do-not-clobber-guest-read-offset.patch
+
+Revert first if audio misbehaves on your platform. Note that the proven half
+of the original audio fix - timeBeginPeriod(1) in src/main.cpp - is Windows
+only, so macOS and Linux audio pacing is untested territory either way.
+---
+diff --git a/src/audio/xma_context.cpp b/src/audio/xma_context.cpp
+index 11b83be..70d8b0f 100644
+--- a/src/audio/xma_context.cpp
++++ b/src/audio/xma_context.cpp
+@@ -417,7 +417,6 @@ void XmaContext::StoreContextMerged(const XMA_CONTEXT_DATA& data,
+   fresh.input_buffer_read_offset = data.input_buffer_read_offset;
+   fresh.error_status = data.error_status;
+   fresh.current_buffer = data.current_buffer;
+-  fresh.output_buffer_read_offset = data.output_buffer_read_offset;
+ 
+   fresh.Store(context_ptr);
+ }

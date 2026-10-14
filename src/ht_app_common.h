@@ -42,7 +42,9 @@ class HtBaseApp : public rex::ReXApp {
     // 2. Override CVARs to force portable mode and bypass the GetUserFolder() hang
     REXCVAR_SET(game_data_root, game_data);
     REXCVAR_SET(user_data_root, user_data);
-    REXCVAR_SET(cache_path, cache_data);
+    // Renamed from cache_path in rexglue-sdk v0.10.0 (src/system/runtime.cpp);
+    // same meaning - the shader cache location.
+    REXCVAR_SET(cache_root, cache_data);
     if (f) { fprintf(f, "Set CVARs\n"); fflush(f); }
 
     // 3. Call base implementation

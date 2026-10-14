@@ -41,6 +41,86 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo"
       }
+    },
+    {
+      "name": "mac-base",
+      "hidden": true,
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "/usr/bin/clang",
+        "CMAKE_CXX_COMPILER": "/usr/bin/clang++",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "13.3",
+        "REXGLUE_USE_D3D12": "OFF",
+        "REXGLUE_USE_VULKAN": "ON"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
+      "name": "mac-debug",
+      "displayName": "macOS ARM64 Debug",
+      "inherits": "mac-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "mac-release",
+      "displayName": "macOS ARM64 Release",
+      "inherits": "mac-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "mac-relwithdebinfo",
+      "displayName": "macOS ARM64 RelWithDebInfo",
+      "inherits": "mac-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "linux-base",
+      "hidden": true,
+      "inherits": "base",
+      "cacheVariables": {
+        "REXGLUE_USE_D3D12": "OFF",
+        "REXGLUE_USE_VULKAN": "ON"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "linux-debug",
+      "displayName": "Linux Debug",
+      "inherits": "linux-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "linux-release",
+      "displayName": "Linux Release",
+      "inherits": "linux-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "linux-relwithdebinfo",
+      "displayName": "Linux RelWithDebInfo",
+      "inherits": "linux-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
     }
   ],
   "buildPresets": [
@@ -55,6 +135,36 @@
     {
       "name": "relwithdebinfo",
       "configurePreset": "relwithdebinfo"
+    },
+    {
+      "name": "mac-debug",
+      "configurePreset": "mac-debug",
+      "jobs": 3
+    },
+    {
+      "name": "mac-release",
+      "configurePreset": "mac-release",
+      "jobs": 3
+    },
+    {
+      "name": "mac-relwithdebinfo",
+      "configurePreset": "mac-relwithdebinfo",
+      "jobs": 3
+    },
+    {
+      "name": "linux-debug",
+      "configurePreset": "linux-debug",
+      "jobs": 3
+    },
+    {
+      "name": "linux-release",
+      "configurePreset": "linux-release",
+      "jobs": 3
+    },
+    {
+      "name": "linux-relwithdebinfo",
+      "configurePreset": "linux-relwithdebinfo",
+      "jobs": 3
     }
   ]
 }

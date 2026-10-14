@@ -175,6 +175,34 @@ class HtPureApp : public HtBaseApp {
 
  protected:
   void OnPreSetup(rex::RuntimeConfig& config) override {
+    // Select the Xenos GPU emulation plugin.
+    //
+    // Required from SDK v0.9.0, which moved GPU emulation out of rexruntime
+    // into a loadable plugin. The gpu_plugin cvar defaults to EMPTY, and empty
+    // means "no GPU emulation" rather than "use the only one there is" - so
+    // without this the game boots, runs the guest and renders nothing. The
+    // only symptom is a black window that is otherwise alive and burning CPU,
+    // plus three warnings in the log:
+    //
+    //   VdSetGraphicsInterruptCallback:  no GPU emulation loaded
+    //   VdInitializeRingBuffer:          no GPU emulation loaded
+    //   VdEnableRingBufferRPtrWriteBack: no GPU emulation loaded
+    //
+    // Set here rather than as a cvar because the cvar is defined in the SDK's
+    // src/ui/rex_app.cpp and never declared in a public header, so it is not
+    // reachable with REXCVAR_SET from outside the SDK. RuntimeConfig is, and
+    // the ordering in ReXApp::SetupPresentation works in our favour: the cvar
+    // is read into config_.gpu_plugin, THEN OnPreSetup runs, THEN the plugin
+    // is loaded. Assigning here overrides the empty default without an SDK
+    // patch, and leaving a non-empty value alone keeps a cvar override
+    // (hydrothunder.toml, command line) authoritative.
+    //
+    // Staging the plugin binary is the other half, and is handled by
+    // GPU_PLUGINS in CMakeLists.txt. Both are needed.
+    if (config.gpu_plugin.empty()) {
+      config.gpu_plugin = "xenos";
+    }
+
 #if defined(_WIN32)
     // Raise the process timer resolution to 1 ms.
     //

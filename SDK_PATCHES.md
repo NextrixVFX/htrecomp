@@ -9,6 +9,67 @@ turn — the cost of rediscovering one of these is measured in days.
 
 ---
 
+## Status against rexglue-sdk v0.10.0
+
+The vendored tree is now **v0.10.0**, not the `0.8.1.19` that
+`manifests/hydrothunder.toml.in` still declares. macOS support only exists
+from v0.10.0, so a mac or Linux build cannot use the version this project was
+originally written against. `sdk_version` is read and reported by codegen, not
+enforced, so the stale value is harmless.
+
+Re-checked against v0.10.0, item by item:
+
+| # | What | Status |
+|---|---|---|
+| 1 | Additive-draw depth test | **PORTED TO VULKAN** (applied directly in the tree, not as a .patch). Not upstream in any form. The original D3D12 version is NOT re-applied — Windows still has the bug unless you build Windows with Vulkan. |
+| 2 | ImGui `CmdListsCount` | **APPLIED** via `patches/0001-imgui-iterate-cmdlists-size.patch`. Bug confirmed still present upstream at `src/ui/imgui_drawer.cpp:453`. |
+| 3 | `fov_probe` diagnostic | Not re-applied. Dev-only, and the FOV override it enabled was reverted. |
+| 4 | XMA read-offset merge | Not applied. Available as `patches/0002-OPTIONAL-...patch`; left off because this file marks it Unproven. |
+| 5 | XMA async context kick | **OBSOLETE — landed upstream.** `WaitForWorkDone()` is gone from the kick path in `src/audio/xma_decoder.cpp`, replaced by an inline decode with a comment describing exactly this change. Nothing to re-apply. |
+
+### Item 1 as ported to Vulkan
+
+Applied in the vendored tree, in three places:
+
+- `include/rex/graphics/flags.h` — `REXCVAR_DECLARE(bool, force_additive_depth_test)`
+- `src/graphics/flags.cpp` — the definition, GPU category, `kHotReload`, default **on**
+- `src/graphics/vulkan/pipeline_cache.cpp` — an `IsAdditiveDrawNeedingDepthTest()`
+  helper in an anonymous namespace, plus an `else if` branch in
+  `GetCurrentStateDescription`
+
+The helper matches on all three of: additive `SRC_ALPHA/ONE` with `kAdd` on both
+colour and alpha (read from `RB_BLENDCONTROL` for render target 0),
+`guest_draw_vertex_count == 6`, and a `zfunc` that is not `kAlways`. When it
+matches, `depth_compare_op` takes the guest's own `zfunc` instead of `kAlways`
+and `depth_write_enable` is forced to 0 — these are additive billboards and the
+guest never asked for a depth write.
+
+**Compiles clean. Never run.** No Metal or Vulkan device was available to test
+on, so whether it actually fixes the lights, and whether it catches anything it
+should not, is unverified. `force_additive_depth_test = false` turns it off
+without a rebuild.
+
+Note the asymmetry this creates: the original D3D12 patch is *not* re-applied,
+so a default Windows build still has the bug. Build Windows with
+`-DREXGLUE_USE_VULKAN=ON -DREXGLUE_USE_D3D12=OFF` to get the fix there, or port
+the same helper into `src/graphics/d3d12/pipeline_cache.cpp`.
+
+For reference, the hook point was `src/graphics/vulkan/pipeline_cache.cpp:1527-1531`:
+
+```cpp
+if (normalized_depth_control.z_enable) {
+  description_out.depth_write_enable = normalized_depth_control.z_write_enable;
+  description_out.depth_compare_op = normalized_depth_control.zfunc;
+} else {
+  description_out.depth_compare_op = xenos::CompareFunction::kAlways;   // <-- here
+}
+```
+
+That `else` was the same hole: the guest cleared `z_enable` while leaving
+`zfunc` programmed.
+
+---
+
 ## 1. Depth-test additive draws the guest issued with depth disabled
 
 **Files**

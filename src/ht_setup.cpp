@@ -1,6 +1,7 @@
 #include "ht_setup.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -369,6 +370,26 @@ bool RunXexTool(const std::filesystem::path&, const std::filesystem::path&) { re
 // hand - which the README documents as the supported route for an
 // already-extracted copy - still got the silent boot-then-die.
 bool ValidateXexUsable(const std::filesystem::path& exe_dir, const std::filesystem::path& xex) {
+  // Escape hatch: HT_SKIP_XEX_CHECK=1 proceeds with whatever default.xex is
+  // there.
+  //
+  // Two reasons it exists. First, xextool is a Win32 binary and
+  // RunXexTool()/FindXexTool() are stubbed out off Windows, so on macOS and
+  // Linux there is otherwise NO conversion path at all - this check is an
+  // unconditional dead end there. Second, the SDK itself decrypts and
+  // LZX-decompresses a compressed basefile at load time
+  // (src/system/xex_module.cpp, ReadImageCompressed for compression_type 2),
+  // so whether conversion is still required on a current SDK is an open
+  // question rather than a settled one.
+  //
+  // The documented failure mode for an unconverted executable is reaching the
+  // title screen and closing on Start, so this is a diagnostic, not a fix.
+  if (const char* skip = std::getenv("HT_SKIP_XEX_CHECK"); skip && skip[0] == '1') {
+    REXLOG_WARN("[ht-setup] HT_SKIP_XEX_CHECK=1: not checking default.xex. "
+                "If the game closes when you press Start, this is why.");
+    return true;
+  }
+
   uint16_t encryption = 0, compression = 0;
   if (!ReadXexFormat(xex, &encryption, &compression)) {
     return true;  // unreadable header: let the runtime have its say

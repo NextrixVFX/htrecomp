@@ -96,7 +96,7 @@ class HtSettingsDialog : public rex::ui::ImGuiDialog {
   // license_mask is a bitfield, but bit 0 is the only one this game reads.
   bool DrawLicenseToggle();
   bool DrawEnumSetting(const char* cvar_name, const char* label, const char* help,
-                       const HtEnumOption* options, int count);
+                       const HtEnumOption* options, int count, bool optional = false);
   void DrawShowFpsToggle();
   // Save file status and a one-click backup. This game rejects a save whose
   // checksum does not match and resets progress when it does - a backup that
