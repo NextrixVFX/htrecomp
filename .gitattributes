@@ -1,2 +1,10 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Shell scripts must keep LF even when committed from Windows. With CRLF they
+# fail on macOS and Linux with the unhelpful:
+#   bad interpreter: /usr/bin/env bash^M: no such file or directory
+*.sh text eol=lf
+
+# Patch files are applied verbatim by git apply; CRLF makes the hunks mismatch.
+*.patch -text
