@@ -119,7 +119,39 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/generated/sources.cmake")
     include(generated/sources.cmake)
     target_sources(hydrothunder PRIVATE ${GENERATED_SOURCES})
     target_include_directories(hydrothunder PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/generated)
-    set_source_files_properties(${GENERATED_SOURCES} PROPERTIES COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/fix_stdio.h")
+
+    # Guest SEH scopes emit __try/__except, which only trap hardware faults
+    # under asynchronous EH. clang++ spells that the GNU way. Mirrors
+    # REXGLUE_RECOMP_OPTIONS in the SDK's project template
+    # (resources/templates/init/rexglue_cmake.inja).
+    set(HT_RECOMP_OPTIONS "")
+    if(WIN32)
+        if(MSVC)
+            list(APPEND HT_RECOMP_OPTIONS /EHa)
+        elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+            list(APPEND HT_RECOMP_OPTIONS -fasync-exceptions)
+        endif()
+    endif()
+
+    # Carried on the sources so they hold for whichever target compiles them.
+    #
+    # This replaces a force-include of fix_stdio.h. Codegen 0.8.1.19 emitted
+    # translation units that included hydrothunder_init.h and needed a platform
+    # prelude force-fed to them; v0.10.0 emits self-contained units that include
+    # hydrothunder_funcs.N.h -> hydrothunder_pch.h, so fix_stdio.h is now dead
+    # weight and its REX_WEAK_FUNC shim is obsolete (the regenerated macro no
+    # longer references it).
+    set_source_files_properties(${GENERATED_SOURCES}
+        PROPERTIES COMPILE_OPTIONS "${HT_RECOMP_OPTIONS}")
+
+    # Also on the target: CMake compiles the PCH from its own cmake_pch.hxx.cxx,
+    # which carries none of the source properties above, and clang rejects a PCH
+    # whose EH mode disagrees with the TU including it.
+    if(HT_RECOMP_OPTIONS)
+        target_compile_options(hydrothunder PRIVATE ${HT_RECOMP_OPTIONS})
+    endif()
+    target_precompile_headers(hydrothunder PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/generated/hydrothunder_pch.h")
 else()
     message(STATUS "generated/sources.cmake not found; run the generate-all target before building")
 endif()

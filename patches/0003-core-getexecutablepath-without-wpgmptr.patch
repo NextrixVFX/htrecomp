@@ -1,0 +1,64 @@
+From: htrecomp
+Subject: [PATCH] core: GetExecutablePath must not use _get_wpgmptr
+
+_wpgmptr is a per-CRT-instance global that only the EXECUTABLE's CRT startup
+populates. This TU is part of rexruntime, a SHARED library, so when a consumer
+links the static CRT the DLL gets its own CRT instance in which _wpgmptr was
+never initialised. _get_wpgmptr then hands a null to the invalid-parameter
+handler, which in a release CRT calls __fastfail and kills the process with
+STATUS_STACK_BUFFER_OVERRUN (0xC0000409).
+
+__fastfail bypasses SEH, so an installed unhandled-exception filter never runs
+and no crash dump is written - the process simply vanishes during startup.
+
+GetModuleFileNameW(nullptr, ...) returns the executable's path and is correct
+regardless of CRT linkage or which module calls it.
+
+Windows-only; the POSIX implementation is unaffected.
+---
+diff --git a/src/core/filesystem_win.cpp b/src/core/filesystem_win.cpp
+index c5a2c5d..312eda6 100644
+--- a/src/core/filesystem_win.cpp
++++ b/src/core/filesystem_win.cpp
+@@ -43,9 +43,38 @@ std::filesystem::path to_path(const std::u16string_view source) {
+ namespace filesystem {
+ 
+ std::filesystem::path GetExecutablePath() {
+-  wchar_t* path;
+-  auto error = _get_wpgmptr(&path);
+-  return !error ? std::filesystem::path(path) : std::filesystem::path();
++  // GetModuleFileNameW(nullptr, ...), NOT _get_wpgmptr.
++  //
++  // _wpgmptr is a per-CRT-instance global that only the EXECUTABLE's CRT
++  // startup populates. This translation unit is part of rexruntime, a SHARED
++  // library, so when a consumer links the static CRT
++  // (CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded) this DLL gets its own CRT
++  // instance in which _wpgmptr was never initialised. _get_wpgmptr then hands
++  // a null to the invalid-parameter handler, which in a release CRT calls
++  // __fastfail and kills the process with STATUS_STACK_BUFFER_OVERRUN
++  // (0xC0000409) before any of this function's callers can react. Because
++  // __fastfail bypasses SEH, an installed unhandled-exception filter never
++  // runs and no crash dump is produced - the process simply vanishes.
++  //
++  // GetModuleFileNameW with a null module handle returns the executable's path
++  // and is correct regardless of CRT linkage or which module calls it.
++  std::wstring buffer(MAX_PATH, L'\0');
++  for (;;) {
++    const DWORD copied =
++        GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
++    if (!copied) {
++      return {};
++    }
++    if (copied < buffer.size()) {
++      buffer.resize(copied);
++      return std::filesystem::path(std::move(buffer));
++    }
++    // Truncated: the path is longer than the buffer. Grow and retry.
++    if (buffer.size() >= 32768) {
++      return {};  // beyond the extended-path limit; something is very wrong
++    }
++    buffer.resize(buffer.size() * 2);
++  }
+ }
+ 
+ std::filesystem::path GetExecutableFolder() {

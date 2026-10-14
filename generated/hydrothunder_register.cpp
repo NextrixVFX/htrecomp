@@ -19766,3 +19766,5 @@ void hydrothunder_RegisterFunctions(rex::runtime::IModuleRegistrar* registrar) {
   registrar->SetFunction(0x827E9E00, sub_827E9E00);
   registrar->SetFunction(0x827EA200, sub_827EA200);
 }
+
+

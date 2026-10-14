@@ -30,3 +30,13 @@ __pycache__/
 *.pyc
 Thumbs.db
 .DS_Store
+
+# The rexglue SDK is NOT committed. It is ~700 MB with submodules, and because
+# the clone carries its own .git, `git add` would record it as a gitlink with
+# no .gitmodules entry - which clones down as an EMPTY directory and breaks the
+# build with no useful error. Clone it yourself per BUILDING.md and apply
+# patches/*.patch.
+third_party/
+
+# Pre-v0.10.0 codegen output, kept locally as a reference. ~122 MB.
+/generated.0.8.1.19.bak/

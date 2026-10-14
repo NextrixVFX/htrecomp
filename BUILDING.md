@@ -29,39 +29,55 @@ That version jump is survivable, and it was checked rather than assumed:
 - `sdk_version` is read and reported by codegen, never enforced, so the stale
   `0.8.1.19` in the manifest does not block anything.
 
-### Two drift breaks that broke the compile, and their fixes
+### generated/ has been regenerated with the v0.10.0 codegen
 
-Both were invisible to a header/symbol audit because they live inside macro
-expansions. Both are fixed in this tree.
+**This is the fix that retires most of the workarounds below.** The tree now
+ships output from the v0.10.0 codegen, not the 0.8.1.19 output it was committed
+with. The previous tree is kept at `generated.0.8.1.19.bak/`.
 
-**`REX_WEAK_FUNC` was deleted in v0.10.0.** The header split that moved
-`REX_FUNC` and `REX_EXTERN` out of `rex/ppc/context.h` into `rex/ppc/func.h`
-kept those two and dropped `REX_WEAK_FUNC`. The committed `generated/` tree
-came from codegen 0.8.1.19, whose `DEFINE_REX_FUNC` expands to:
+Regenerate with:
 
-```cpp
-__attribute__((alias("__imp__" #name))) REX_WEAK_FUNC(name);
-REX_EXTERN(__imp__##name)
+```sh
+cmake --build <build-dir> --target generate-all
 ```
 
-- the recompiled body lands on `__imp__sub_X` while `sub_X` becomes a weak
-alias to it, which is what lets a hook replace `sub_X` with the original still
-reachable. Without the macro every generated TU fails with `unknown type name
-'REX_WEAK_FUNC'`, 61 files over.
+It needs `game_data/default.xex` present (`HT_GAME_DATA_ROOT`, default
+`./game_data`) and takes about 5 seconds. It does NOT need a converted
+executable - codegen reads the encrypted, compressed one straight from the
+package.
 
-`fix_stdio.h` now restores the v0.9.0 definition. That file is already
-`-include`'d into every generated TU, which puts it ahead of the first
-`DEFINE_REX_FUNC` use. **The proper fix is to regenerate `generated/` with the
-v0.10.0 codegen** (`--target generate-all`, which needs a converted
-`default.xex` present); drop the shim once that is done. If v0.10.0's codegen
-still emits `REX_WEAK_FUNC`, the macro belongs upstream in `rex/ppc/func.h`
-and the omission is worth reporting.
+What changed: 247 files written, 120 translation units instead of 61, and the
+units are now self-contained (`hydrothunder_funcs.N.h` -> `hydrothunder_pch.h`)
+rather than everything hanging off `hydrothunder_init.h`.
 
-**The `cache_path` cvar was renamed to `cache_root`**
-(`src/system/runtime.cpp:34`, same meaning - the shader cache location).
-`src/ht_app_common.h` used `REXCVAR_SET(cache_path, ...)`, and because
-`REXCVAR_SET` pastes the name into an identifier, the failure surfaced as
-`use of undeclared identifier 'FLAGS_cache_path_storage_'`. Fixed.
+Three problems disappeared with it:
+
+**1. macOS could not compile at all.** Codegen 0.8.1.19 defined
+`DEFINE_REX_FUNC` with `__attribute__((alias("__imp__" #name)))`, and Mach-O has
+no symbol aliases - clang rejects them outright with `error: aliases are not
+supported on darwin`, once per function. The v0.10.0 template has a Darwin
+branch that emits a weak symbol whose body is a `[[clang::musttail]]` tail call
+to `__imp__##name`: a single `jmp`, still weak so hooks can replace it, with
+`__imp__##name` remaining the original entry point. Note it is a thunk, not an
+alias, so `&name != &__imp__##name` by design.
+
+**2. `REX_WEAK_FUNC` no longer exists and is no longer needed.** The v0.10.0
+macro inlines `__attribute__((weak, noinline))` itself. The shim that used to
+live in `fix_stdio.h` is gone.
+
+**3. `fix_stdio.h` is dead.** It was force-included into every generated TU to
+supply a platform prelude the old units expected. The new units need nothing
+force-fed. The file is left in the tree but is no longer referenced by the
+build; `CMakeLists.txt` now sets the SDK's own recompilation options instead
+(`-fasync-exceptions` on Windows+Clang for guest SEH, plus the PCH on both the
+sources and the target, mirroring `REXGLUE_RECOMP_OPTIONS` in
+`resources/templates/init/rexglue_cmake.inja`).
+
+The only compile-time drift fix still needed is the cvar rename:
+`cache_path` became `cache_root` (`src/system/runtime.cpp:34`). Because
+`REXCVAR_SET` pastes the name into an identifier, it surfaced as
+`use of undeclared identifier 'FLAGS_cache_path_storage_'`. Fixed in
+`src/ht_app_common.h`.
 
 ### A third break that compiles fine and fails at runtime
 
@@ -237,8 +253,34 @@ Two extra steps that are easy to miss:
 cd third_party/rexglue-sdk/thirdparty/moltenvk && ./fetchDependencies --macos && cd -
 
 # Only needed if the tree was cloned on, or copied from, Windows.
-python tools/fix_symlink_checkout.py
+python3 tools/fix_symlink_checkout.py   # 'python' is not on PATH on macOS
 ```
+
+### `xcodebuild` must point at Xcode, not the Command Line Tools
+
+MoltenVK's `fetchDependencies` shells out to `xcodebuild`, which fails if the
+active developer directory is a Command Line Tools install:
+
+```
+xcode-select: error: tool 'xcodebuild' requires Xcode, but active developer
+directory '/Library/Developer/CommandLineTools' is a command line tools instance
+```
+
+This usually does NOT mean Xcode is missing - only that `xcode-select` points
+elsewhere. Check and switch:
+
+```sh
+xcode-select -p                                                  # what is active
+sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+sudo xcodebuild -license accept                                  # if never run
+xcodebuild -version                                              # confirm
+```
+
+If Xcode genuinely is not installed, you can sidestep MoltenVK's build instead
+by taking `libMoltenVK.dylib` from the prebuilt `rexglue-sdk-0.10.0-mac-arm64`
+release asset, or from `brew install molten-vk`. Switching `xcode-select` is
+the better path when Xcode is available, since it builds the revision the SDK
+pins.
 
 ### MoltenVK's `External/` dependencies
 

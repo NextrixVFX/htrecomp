@@ -1,0 +1,131 @@
+From: htrecomp
+Subject: [PATCH] vulkan: depth-test additive draws issued with depth disabled
+
+Port of SDK_PATCHES.md item 1 from the D3D12 backend to Vulkan, which is the
+backend macOS and Linux use.
+
+Hydro Thunder Hurricane draws its point lights as additive SRC_ALPHA/ONE
+billboard quads (6 indices) with RB_DEPTHCONTROL.z_enable clear, while still
+leaving zfunc programmed and a depth target bound - so they draw through
+terrain and through the player's boat.
+
+Re-enables the depth test for that exact signature, using the compare function
+the guest left in the register. Never writes depth. Gated on the new
+force_additive_depth_test cvar (GPU, kHotReload, default on) so it can be
+A/B'd without a rebuild.
+
+A workaround, not a root-cause fix: it pattern-matches on blend mode and index
+count, so it could in principle catch an unrelated additive effect that wants
+to draw on top. COMPILES BUT HAS NEVER RUN - no Vulkan or Metal device was
+available to test it.
+---
+diff --git a/include/rex/graphics/flags.h b/include/rex/graphics/flags.h
+index 2cf24c4..89428ac 100644
+--- a/include/rex/graphics/flags.h
++++ b/include/rex/graphics/flags.h
+@@ -30,6 +30,7 @@ REXCVAR_DECLARE(bool, readback_resolve_half_pixel_offset);
+ REXCVAR_DECLARE(bool, readback_memexport);
+ REXCVAR_DECLARE(bool, readback_memexport_fast);
+ REXCVAR_DECLARE(bool, occlusion_query_enable);
++REXCVAR_DECLARE(bool, force_additive_depth_test);
+ REXCVAR_DECLARE(int32_t, query_occlusion_fake_sample_count);
+ 
+ // GPU Depth / Render Target Behavior
+diff --git a/src/graphics/flags.cpp b/src/graphics/flags.cpp
+index e2983a4..8e359f3 100644
+--- a/src/graphics/flags.cpp
++++ b/src/graphics/flags.cpp
+@@ -25,6 +25,19 @@ REXCVAR_DEFINE_BOOL(gamma_render_target_as_unorm16, true, "GPU",
+                     "Use R16G16B16A16_UNORM for gamma render targets (more accurate than sRGB)")
+     .lifecycle(rex::cvar::Lifecycle::kHotReload);
+ REXCVAR_DEFINE_STRING(dump_shaders, "", "GPU", "Path to dump shaders to");
++// Hydro Thunder Hurricane draws its point lights as additive SRC_ALPHA/ONE
++// billboard quads (6 indices) with RB_DEPTHCONTROL.z_enable clear, while still
++// leaving zfunc programmed and a depth target bound - so they drew through
++// terrain and through the player's boat. Re-enable the test for that exact
++// signature, using the compare function the guest left in the register.
++//
++// This is a workaround, not a root-cause fix: it pattern-matches on blend mode
++// and index count, so it could in principle catch an unrelated additive effect
++// that genuinely wants to draw on top. Set false to compare instantly.
++REXCVAR_DEFINE_BOOL(force_additive_depth_test, true, "GPU",
++                    "Re-enable the depth test for additive billboard draws the guest issued "
++                    "with depth disabled but a compare function still programmed")
++    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+ REXCVAR_DEFINE_BOOL(use_fuzzy_alpha_epsilon, false, "GPU",
+                     "Use approximate compare for alpha test values to prevent "
+                     "flickering on NVIDIA graphics cards");
+diff --git a/src/graphics/vulkan/pipeline_cache.cpp b/src/graphics/vulkan/pipeline_cache.cpp
+index 91ac08f..ae43d17 100644
+--- a/src/graphics/vulkan/pipeline_cache.cpp
++++ b/src/graphics/vulkan/pipeline_cache.cpp
+@@ -1359,6 +1359,49 @@ void VulkanPipelineCache::WritePipelineRenderTargetDescription(
+   render_target_out.color_write_mask = write_mask;
+ }
+ 
++namespace {
++
++// Recognises the one draw signature that needs the guest's cleared z_enable
++// overridden: an additive SRC_ALPHA/ONE billboard pair (6 indices) issued with
++// depth testing off but a real compare function still in the register.
++//
++// Established from RenderDoc captures of Hydro Thunder Hurricane's point
++// lights. Everything else that could have occluded them was ruled out first -
++// no host occlusion queries in the frame, no PM4_VIZ_QUERY, no depth read or
++// discard in the pixel shader, and RB_MODECONTROL.edram_mode was kColorDepth,
++// so GetNormalizedDepthControl was not the one disabling depth.
++//
++// Deliberately narrow. It matches on blend factors AND index count AND a
++// non-kAlways zfunc, so an ordinary additive effect that wants to draw on top
++// keeps doing so. Gated on force_additive_depth_test (hot-reloadable) to make
++// an A/B comparison a one-line config change.
++bool IsAdditiveDrawNeedingDepthTest(
++    reg::RB_DEPTHCONTROL normalized_depth_control,
++    const PrimitiveProcessor::ProcessingResult& primitive_processing_result,
++    reg::RB_BLENDCONTROL blend_control) {
++  if (!REXCVAR_GET(force_additive_depth_test)) {
++    return false;
++  }
++  // Nothing to gain if the guest asked for kAlways: that is what the cleared
++  // z_enable already produces.
++  if (normalized_depth_control.zfunc == xenos::CompareFunction::kAlways) {
++    return false;
++  }
++  // Two triangles, as a billboard quad is issued.
++  if (primitive_processing_result.guest_draw_vertex_count != 6) {
++    return false;
++  }
++  // Additive: SRC_ALPHA/ONE, added, on both colour and alpha.
++  return blend_control.color_srcblend == xenos::BlendFactor::kSrcAlpha &&
++         blend_control.color_destblend == xenos::BlendFactor::kOne &&
++         blend_control.color_comb_fcn == xenos::BlendOp::kAdd &&
++         blend_control.alpha_srcblend == xenos::BlendFactor::kSrcAlpha &&
++         blend_control.alpha_destblend == xenos::BlendFactor::kOne &&
++         blend_control.alpha_comb_fcn == xenos::BlendOp::kAdd;
++}
++
++}  // namespace
++
+ bool VulkanPipelineCache::GetCurrentStateDescription(
+     const VulkanShader::VulkanTranslation* vertex_shader,
+     const VulkanShader::VulkanTranslation* pixel_shader,
+@@ -1527,6 +1570,19 @@ bool VulkanPipelineCache::GetCurrentStateDescription(
+       if (normalized_depth_control.z_enable) {
+         description_out.depth_write_enable = normalized_depth_control.z_write_enable;
+         description_out.depth_compare_op = normalized_depth_control.zfunc;
++      } else if (IsAdditiveDrawNeedingDepthTest(
++                     normalized_depth_control, primitive_processing_result,
++                     // Render target 0: these billboards draw to the primary
++                     // colour target. Blend state for the other targets is not
++                     // written into the description until further below.
++                     regs.Get<reg::RB_BLENDCONTROL>(
++                         reg::RB_BLENDCONTROL::rt_register_indices[0]))) {
++        // The guest cleared z_enable but left a usable zfunc programmed, with a
++        // depth target bound. Honour the register rather than the clear. Never
++        // writes depth: these are additive billboards, and the guest did not ask
++        // for a depth write.
++        description_out.depth_write_enable = 0;
++        description_out.depth_compare_op = normalized_depth_control.zfunc;
+       } else {
+         description_out.depth_compare_op = xenos::CompareFunction::kAlways;
+       }
