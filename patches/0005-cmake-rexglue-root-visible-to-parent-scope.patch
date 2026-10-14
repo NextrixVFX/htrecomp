@@ -1,0 +1,47 @@
+From: htrecomp
+Subject: [PATCH] cmake: REXGLUE_ROOT must be visible to add_subdirectory consumers
+
+A plain set() is directory-scoped, so REXGLUE_ROOT does not exist in a parent
+project that pulls the SDK in with add_subdirectory and then calls
+rexglue_configure_target() from its own scope.
+
+_rexglue_stage_macos_vulkan_runtime() builds the MoltenVK ICD path as
+"${REXGLUE_ROOT}/cmake/MoltenVK_icd.json". With the variable empty that becomes
+the absolute path "/cmake/MoltenVK_icd.json", and the macOS build fails at the
+final link step, after every object has compiled:
+
+  Error copying file (if different) from "/cmake/MoltenVK_icd.json" to
+  ".../vulkan/share/vulkan/icd.d/MoltenVK_icd.json": No such file or directory
+
+The SDK's own CI builds the SDK standalone, where the plain set() is in scope,
+so this only affects add_subdirectory consumers on macOS.
+
+CACHE INTERNAL makes it visible everywhere without changing its value.
+---
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 9b3cdf5..57f3ccf 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -52,8 +52,20 @@ if (REXGLUE_ENABLE_FIDELITYFX AND
+         "REXGLUE_ENABLE_FIDELITYFX requires at least one graphics backend")
+ endif()
+ 
+-# Root of the SDK source tree
+-set(REXGLUE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
++# Root of the SDK source tree.
++#
++# CACHE INTERNAL, not a plain set(): a plain set() is directory-scoped, so it is
++# invisible to a parent project that pulls the SDK in with add_subdirectory and
++# then calls rexglue_configure_target() from its own scope. That is not
++# hypothetical - _rexglue_stage_macos_vulkan_runtime() builds the MoltenVK ICD
++# path as "${REXGLUE_ROOT}/cmake/MoltenVK_icd.json", which silently becomes the
++# absolute path "/cmake/MoltenVK_icd.json" and fails the macOS link step with:
++#
++#   Error copying file (if different) from "/cmake/MoltenVK_icd.json" ...
++#
++# The SDK's own CI builds standalone, where the plain set() is in scope, so this
++# only shows up for add_subdirectory consumers on macOS.
++set(REXGLUE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}" CACHE INTERNAL "rexglue SDK source root")
+ 
+ # SDK install support
+ include(GNUInstallDirs)

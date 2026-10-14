@@ -189,7 +189,8 @@ if [ "$SKIP_SDK" -eq 0 ]; then
     step "SDK patches"
     PATCHES="0001-imgui-iterate-cmdlists-size.patch
 0003-core-getexecutablepath-without-wpgmptr.patch
-0004-vulkan-additive-draw-depth-test.patch"
+0004-vulkan-additive-draw-depth-test.patch
+0005-cmake-rexglue-root-visible-to-parent-scope.patch"
     [ "$XMA_PATCH" -eq 1 ] && PATCHES="$PATCHES
 0002-OPTIONAL-xma-do-not-clobber-guest-read-offset.patch"
 
